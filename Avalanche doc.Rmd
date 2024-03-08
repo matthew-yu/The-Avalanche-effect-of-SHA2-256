@@ -1,0 +1,130 @@
+---
+title: "The Avalanche effect of SHA-2 256"
+author: "Matthew Yu / PUFsecurity"
+date: "2024/02/06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Summary
+
+This work carries out an experiment of **the Avalanche effect**. SHA-2 was used as the cryptographic algorithm to demonstrate such effect. The idea is that small changes in the input will propagate rapidly through iterations of a cryptographic algorithm. That is, every bit of the output should depend on every bit of the input before computation.
+
+In this work, we intend to experiment the Avalanche effect of the Hash function **SHA-2 256**. The idea is, we let users type arbitrary input, regardless of it being numbers, punctuation marks, or a longer passage. We calculate the SHA-2 digest of the input, and also the SHA-2 digest of a "tweaked" input (i.e. a slight change in the input). We then calculate the Hamming Distance of the 2 digest values. The result will indicate to what extent the output has changed.
+
+We expand the "tweaking" to collect substantial samples. Having a large number of Hamming Distances as a result should tell us how the Avalanche effect applies in terms of the SHA-2 256 Hash function.
+
+## Preparation
+
+Before implementing the experiment, we start by including some useful libraries. Utilizing such libraries would save us valuable time since we won't need to build things from scratch.
+
+```{r}
+library(gtools) #Used to convert user input to ASCII code
+library(openssl) #We will call function from openssl for SHA-2 calculation 
+library(BMS) #Used to convert between hexadecimal and binary
+library(bitops) #Enable Bitwise operations
+library(ggplot2) #Perhaps the Golden Standard of Data Visualization in R
+```
+
+
+## Creating useful submodules
+
+There are 2 sets of sequences that we foresee will frequently occur, for different purposes. While we will intake character strings from users, the plan is to first convert them to ASCII code and then to integer or binary for bitwise manipulation. One useful tool will be a function that converts numeric inputs to binary strings.
+
+```{r}
+toBin <- function(x){
+  bits=floor(log(x)/log(2))
+  powers = 2^(bits:0)
+  return(bitwAnd(x,powers)/powers)
+}
+#An example: Convert the number 97 to a binary string
+toBin (97)
+```
+
+We also need to consider early how we are going to present our result in a clear manner. While we are not going to paste the entire input/tweaked input in case of them being too large, we can simply extract the last `n` characters:
+
+```{r}
+substrRight <- function(x, n){
+  substr(x, nchar(x)-n+1, nchar(x))
+}
+```
+
+
+## Main function
+
+Our goal is to demonstrate the Avalanche effect of SHA-2 256 Hash function. For the parameter of the main function, besides obviously the `input`, we also reserve a variable for user to decide how many results should be printed.
+
+The main function will also generate a plot depicting the distribution of Hamming Distances.
+
+```{r}
+#Operate flipping one bit of arbitrary input at a time
+#Displays the first nres results
+Avalanche_demo <- function(input, nres=6){
+  input_bin <- unlist(lapply(asc(input), toBin))
+  N <- length(input_bin)
+  flipped_data <- c()
+  for(i in 1:N){
+    flip_vec <- input_bin
+    flip_vec[N-i+1] <- bitwXor(input_bin[N-i+1],1)
+    flipped_data[i] <- paste(flip_vec, collapse = "")
+  }
+  #calculate SHA-2 digest of flipped bit
+  flipped_sha2 <- c()
+  for(i in 1:N){
+    flipped_sha2[i] <- sha256(flipped_data[i])
+  }
+  #Hex to bin for HD calculation
+  HD <- c()
+  original_sha2 <- sha256(paste(input_bin, collapse = ""))
+  for(i in 1:N){
+    HD[i] <- sum(hex2bin(original_sha2) != hex2bin(flipped_sha2[i]))/256
+  }
+  #Print results
+  org_bin <- substrRight(paste(input_bin, collapse = ""),12)
+  exhibit <- c(head(substrRight(flipped_data[1:nres],12), nres))
+  cat("\n","original data = \n", input, "\n")
+  cat("\n","original data in binary = \n ...", org_bin, "\n")
+  cat("\n","flipped data in binary = \n")
+  for(i in 1:nres){
+    cat(" ...", exhibit[i],"\n")
+  }
+  cat("\n","original sha2 = \n",sha256(paste(input_bin, collapse = "")),"\n")
+  cat("\n","flipped sha2 = \n")
+  for(i in 1:nres){
+    cat("",flipped_sha2[i],"\n")
+  }
+  cat("\n","mean of Hamming Distance = ",mean(HD),"\n")
+  #Plotting the Hamming Distances retrieved
+  res_plot <- ggplot(as.data.frame(HD),
+                     aes(HD))+geom_bar(fill="steelblue")+scale_x_binned()
+  res_plot <- res_plot+labs(title="Hamming Distances with message tweaked")
+  res_plot <- res_plot+theme(plot.background=element_rect(colour="black", fill=NA, size=1))
+  res_plot
+}
+```
+
+Note that the number of Hamming Distances (samples) depend on the length of input. That is, if the input is equivalent to 16 binary bits, as we flip the input bit by bit, there will be a total of 16 "tweaked inputs" that has a Hamming Distance of 1 before SHA-2 operation. Then, after undergoing SHA-2, the function will calculate 16 Hamming Distances by comparing the digest of the original input and the "tweaked input".
+
+
+## Extreme cases
+
+We start the experiment by seeing if the Avalanche effect stands the test of "corner cases". The ASCII code of an empty space " " is 32, that is 00100000 in 8-bit binary.
+
+```{r}
+Avalanche_demo("              ")
+```
+
+The result shows an average HD of 0.5012091, which is pretty close to 50%.
+
+## Arbitrary Input
+
+Now we feed a longer passage. This time, instead of the default setting of showing the first 6 results, we print the first 12 by assigning the parameter `nres = 12`.
+
+```{r}
+Avalanche_demo("(December 14th, 2023) PUFsecurity, a subsidiary of eMemory dedicated to innovating PUF-based security solutions, and Himax Technologies, Inc. (Nasdaq: HIMX) (“Himax”), a leading supplier and fabless manufacturer of display drivers and other semiconductor products, today announced the successful deployment of PUFsecurity’s PUF-based Root of Trust IP, PUFrt, into Himax’s WiseEye2 AI processor (WE2). WE2 is an ultra-low-power AI chip revolutionizing Endpoint AI application performance while prioritizing user security and data protection.", nres = 12)
+```
+
+The result shows a mean Hamming Distance of 0.4995783. Compared to the previous corner case, where the sample size is small, The current plot also exhibits that many of the Hamming Distances are close to 50%.
